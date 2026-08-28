@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Sudoku Scanner & Solver</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#121212">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <script async src="https://docs.opencv.org/4.x/opencv.js" id="opencv-script"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #121212;
+      color: #e2e8f0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding: 16px 12px;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 16px;
+    }
+    h1 { font-size: 1.5rem; font-weight: 700; color: #60a5fa; }
+    p.subtitle { font-size: 0.85rem; color: #94a3b8; margin-top: 4px; }
+    
+    .media-container {
+      width: 100%;
+      max-width: 380px;
+      position: relative;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #1e293b;
+      border: 1px solid #334155;
+      margin-bottom: 12px;
+      aspect-ratio: 4 / 3;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    video, #preview-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .media-overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      border: 2px dashed rgba(96, 165, 250, 0.5);
+      margin: 12px;
+      border-radius: 8px;
+      pointer-events: none;
+    }
+
+    .btn-group {
+      width: 100%;
+      max-width: 380px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      width: 100%;
+    }
+    button, label.btn-upload {
+      flex: 1;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: center;
+      transition: background 0.2s, transform 0.1s;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    button:active, label.btn-upload:active { transform: scale(0.98); }
+    .btn-primary { background: #2563eb; color: #ffffff; }
+    .btn-primary:disabled { background: #1e3a8a; color: #64748b; cursor: not-allowed; }
+    .btn-secondary { background: #334155; color: #f1f5f9; }
+    .btn-success { background: #059669; color: #ffffff; }
+    .btn-danger { background: #dc2626; color: #ffffff; }
+    input[type="file"] { display: none; }
+
+    .status-box {
+      width: 100%;
+      max-width: 380px;
+      padding: 8px 12px;
+      background: #1e293b;
+      border-left: 4px solid #3b82f6;
+      border-radius: 4px;
+      font-size: 0.85rem;
+      color: #fbbf24;
+      margin-bottom: 16px;
+      min-height: 38px;
+      display: flex;
+      align-items: center;
+    }
+
+    /* 9x9 Sudoku Grid */
+    .sudoku-container {
+      width: 100%;
+      max-width: 380px;
+      aspect-ratio: 1 / 1;
+      background: #0f172a;
+      border: 3px solid #60a5fa;
+      border-radius: 8px;
+      display: grid;
+      grid-template-columns: repeat(9, 1fr);
+      grid-template-rows: repeat(9, 1fr);
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+    .cell {
+      width: 100%;
+      height: 100%;
+      text-align: center;
+      font-size: 1.25rem;
+      font-weight: 700;
+      background: #1e293b;
+      color: #f8fafc;
+      border: 1px solid #334155;
+      outline: none;
+      border-radius: 0;
+      -webkit-appearance: none;
+      margin: 0;
+    }
+    .cell:focus {
+      background: #334155;
+      box-shadow: inset 0 0 0 2px #60a5fa;
+    }
+    /* 3x3 Subgrid borders */
+    .cell:nth-child(3n) { border-right: 2px solid #60a5fa; }
+    .cell:nth-child(9n) { border-right: none; }
+    .cell:nth-child(n+19):nth-child(-n+27),
+    .cell:nth-child(n+46):nth-child(-n+54) { border-bottom: 2px solid #60a5fa; }
+
+    .cell.detected-cell { color: #60a5fa; font-weight: bold; }
+    .cell.solved-cell { color: #34d399; font-weight: bold; }
+
+    canvas { display: none; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Sudoku Scanner</h1>
+    <p class="subtitle">Digitalisiere & löse gedruckte Sudokus</p>
+  </header>
+
+  <div class="media-container">
+    <video id="webcam" autoplay playsinline muted></video>
+    <img id="preview-img" style="display:none;" alt="Vorschau">
+    <div class="media-overlay"></div>
+  </div>
+
+  <div class="status-box" id="status">OpenCV.js wird geladen...</div>
+
+  <div class="btn-group">
+    <button id="capture-btn" class="btn-primary" onclick="processSudoku()" disabled>
+      📷 Sudoku Scannen
+    </button>
+    <div class="btn-row">
+      <label class="btn-upload btn-secondary">
+        📁 Foto wählen
+        <input type="file" id="file-input" accept="image/*" onchange="handleFileUpload(event)">
+      </label>
+      <button class="btn-success" onclick="solveSudokuGrid()">🧩 Lösen</button>
+      <button class="btn-danger" onclick="clearGrid()">🗑️ Reset</button>
+    </div>
+  </div>
+
+  <div class="sudoku-container" id="grid-container"></div>
+
+  <canvas id="proc-canvas"></canvas>
+
+<script>
+  let video = document.getElementById('webcam');
+  let previewImg = document.getElementById('preview-img');
+  let statusEl = document.getElementById('status');
+  let captureBtn = document.getElementById('capture-btn');
+  let cvReady = false;
+
+  // Initialize OpenCV loading check
+  document.getElementById('opencv-script').onload = () => {
+    cvReady = true;
+    captureBtn.disabled = false;
+    statusEl.innerText = "Bereit! Richte die Kamera auf ein Sudoku.";
+  };
+
+  // Start Camera Stream
+  async function initCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+      video.srcObject = stream;
+    } catch (err) {
+      statusEl.innerText = "Kamerazugriff nicht möglich. Nutzen Sie den Foto-Upload.";
+    }
+  }
+  initCamera();
+
+  // Initialize 9x9 Grid Input Elements
+  const gridContainer = document.getElementById('grid-container');
+  for (let i = 0; i < 81; i++) {
+    let input = document.createElement('input');
+    input.type = 'text';
+    input.inputMode = 'numeric';
+    input.maxLength = 1;
+    input.className = 'cell';
+    input.id = `cell-${i}`;
+    input.addEventListener('input', (e) => {
+      if (!/^[1-9]$/.test(e.target.value)) {
+        e.target.value = '';
+      }
+    });
+    gridContainer.appendChild(input);
+  }
+
+  function handleFileUpload(event) {
+    const file = event.target.files[0];
+    if (file) {
+      const url = URL.createObjectURL(file);
+      previewImg.src = url;
+      previewImg.style.display = 'block';
+      video.style.display = 'none';
+      statusEl.innerText = "Foto geladen. Tippe auf 'Sudoku Scannen'.";
+    }
+  }
+
+  async function processSudoku() {
+    if (!cvReady) return alert("OpenCV.js lädt noch, bitte kurz warten...");
+    statusEl.innerText = "Verarbeite Bild...";
+
+    const canvas = document.getElementById('proc-canvas');
+    const ctx = canvas.getContext('2d');
+
+    if (previewImg.style.display === 'block') {
+      canvas.width = previewImg.naturalWidth;
+      canvas.height = previewImg.naturalHeight;
+      ctx.drawImage(previewImg, 0, 0);
+    } else {
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    }
+
+    try {
+      let src = cv.imread(canvas);
+      let gray = new cv.Mat();
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+      cv.adaptiveThreshold(gray, gray, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
+
+      let contours = new cv.MatVector();
+      let hierarchy = new cv.Mat();
+      cv.findContours(gray, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+      let maxArea = 0, maxContour = null;
+      for (let i = 0; i < contours.size(); ++i) {
+        let cnt = contours.get(i);
+        let area = cv.contourArea(cnt);
+        if (area > 5000) {
+          let approx = new cv.Mat();
+          let peri = cv.arcLength(cnt, true);
+          cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+          if (approx.rows === 4 && area > maxArea) {
+            maxArea = area;
+            maxContour = approx;
+          }
+        }
+      }
+
+      if (!maxContour) {
+        statusEl.innerText = "⚠️ Kein Sudoku-Gitter erkannt. Nah heranhalten & gut ausleuchten.";
+        src.delete(); gray.delete(); contours.delete(); hierarchy.delete();
+        return;
+      }
+
+      let warped = warpPerspective(src, maxContour, 450, 450);
+      cv.imshow(canvas, warped);
+
+      statusEl.innerText = "Erkenne Zahlen mit Tesseract OCR...";
+      const worker = await Tesseract.createWorker('eng');
+      await worker.setParameters({ tessedit_char_whitelist: '123456789' });
+
+      const cellWidth = 50;
+      for (let row = 0; row < 9; row++) {
+        for (let col = 0; col < 9; col++) {
+          let cellIdx = row * 9 + col;
+          let cellCanvas = document.createElement('canvas');
+          cellCanvas.width = cellWidth;
+          cellCanvas.height = cellWidth;
+          let cellCtx = cellCanvas.getContext('2d');
+
+          // Crop inner cell area to minimize grid lines
+          cellCtx.drawImage(canvas, col * cellWidth + 6, row * cellWidth + 6, cellWidth - 12, cellWidth - 12, 0, 0, cellWidth, cellWidth);
+
+          const { data: { text } } = await worker.recognize(cellCanvas);
+          const cleanDigit = text.trim();
+          let input = document.getElementById(`cell-${cellIdx}`);
+          if (cleanDigit.length > 0 && /^[1-9]$/.test(cleanDigit)) {
+            input.value = cleanDigit;
+            input.className = 'cell detected-cell';
+          }
+        }
+      }
+
+      await worker.terminate();
+      statusEl.innerText = "Digitalisierung abgeschlossen!";
+
+      src.delete(); gray.delete(); contours.delete(); hierarchy.delete(); warped.delete();
+    } catch (e) {
+      console.error(e);
+      statusEl.innerText = "Fehler bei der Bildverarbeitung.";
+    }
+  }
+
+  function warpPerspective(src, approx, width, height) {
+    let pts = [];
+    for (let i = 0; i < 4; i++) {
+      pts.push({ x: approx.data32S[i * 2], y: approx.data32S[i * 2 + 1] });
+    }
+    pts.sort((a, b) => (a.x + a.y) - (b.x + b.y));
+    let tl = pts[0];
+    let br = pts[3];
+    let remaining = [pts[1], pts[2]];
+    remaining.sort((a, b) => (a.x - a.y) - (b.x - b.y));
+    let bl = remaining[0];
+    let tr = remaining[1];
+
+    let srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+      tl.x, tl.y,
+      tr.x, tr.y,
+      br.x, br.y,
+      bl.x, bl.y
+    ]);
+    let dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, width, 0, width, height, 0, height]);
+    let M = cv.getPerspectiveTransform(srcTri, dstTri);
+    let dst = new cv.Mat();
+    cv.warpPerspective(src, dst, M, new cv.Size(width, height));
+    srcTri.delete(); dstTri.delete(); M.delete();
+    return dst;
+  }
+
+  // Sudoku Solver (Backtracking)
+  function solveSudokuGrid() {
+    let board = [];
+    let isInitial = [];
+    for (let r = 0; r < 9; r++) {
+      board[r] = [];
+      isInitial[r] = [];
+      for (let c = 0; c < 9; c++) {
+        let val = document.getElementById(`cell-${r * 9 + c}`).value;
+        if (val >= 1 && val <= 9) {
+          board[r][c] = parseInt(val, 10);
+          isInitial[r][c] = true;
+        } else {
+          board[r][c] = 0;
+          isInitial[r][c] = false;
+        }
+      }
+    }
+
+    if (!isValidSudoku(board)) {
+      statusEl.innerText = "❌ Fehler: Ungültiges/Widersprüchliches Sudoku!";
+      return;
+    }
+
+    if (solve(board)) {
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          let input = document.getElementById(`cell-${r * 9 + c}`);
+          input.value = board[r][c];
+          if (!isInitial[r][c]) {
+            input.className = 'cell solved-cell';
+          }
+        }
+      }
+      statusEl.innerText = "✅ Sudoku erfolgreich gelöst!";
+    } else {
+      statusEl.innerText = "❌ Keine Lösung für dieses Sudoku gefunden.";
+    }
+  }
+
+  function isValidSudoku(board) {
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        let num = board[r][c];
+        if (num !== 0) {
+          board[r][c] = 0;
+          if (!isSafe(board, r, c, num)) {
+            board[r][c] = num;
+            return false;
+          }
+          board[r][c] = num;
+        }
+      }
+    }
+    return true;
+  }
+
+  function isSafe(board, row, col, num) {
+    for (let x = 0; x < 9; x++) {
+      if (board[row][x] === num || board[x][col] === num) return false;
+    }
+    let startRow = row - (row % 3);
+    let startCol = col - (col % 3);
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        if (board[i + startRow][j + startCol] === num) return false;
+      }
+    }
+    return true;
+  }
+
+  function solve(board) {
+    for (let row = 0; row < 9; row++) {
+      for (let col = 0; col < 9; col++) {
+        if (board[row][col] === 0) {
+          for (let num = 1; num <= 9; num++) {
+            if (isSafe(board, row, col, num)) {
+              board[row][col] = num;
+              if (solve(board)) return true;
+              board[row][col] = 0;
+            }
+          }
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  function clearGrid() {
+    for (let i = 0; i < 81; i++) {
+      let input = document.getElementById(`cell-${i}`);
+      input.value = '';
+      input.className = 'cell';
+    }
+    statusEl.innerText = "Gitter zurückgesetzt.";
+  }
+
+  // Register PWA Service Worker
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js')
+      .then(() => console.log('Service Worker registriert'))
+      .catch(err => console.error('Service Worker Fehler:', err));
+  }
+</script>
+</body>
+</html>
